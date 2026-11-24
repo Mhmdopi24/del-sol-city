@@ -1,79 +1,88 @@
-// The screenshot scenes behind ?shot=start|play|end. Each one plays the real rules forward from a
-// fresh world for a fixed number of steps, steered by a simple autopilot (look ahead each way the
-// paddle could move, keep clear of blocks, chase the lowest coin when that is safe), so the frame
-// is what a short game really looks like and the same seed always gives the same frame.
-import { FIELD, PLAYER, STEP } from './config.js';
-import { EVENT_OVER, KIND_BLOCK } from './world.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// Del Sol City — shots.js
+// Staged, deterministic scenes for the entry's screenshots, selected with
+// ?shot=1..4. Each shot reseeds the world (main.js uses the same seed), puts
+// Mara, traffic and the police in composed positions, sets the HUD state the
+// scene needs, and parks the camera — the game then renders the scene live,
+// so a screenshot is a real frame of the game, never a composite.
 
-const START_SECONDS = 5;
-const PLAY_SECONDS = 26;
-const END_LIMIT_SECONDS = 600;
-/**
- * How far ahead, in seconds, the autopilot checks each way it could move: the play scene's pilot
- * looks well ahead and keeps all its lives; the end scene's looks only a moment ahead, so it is
- * caught out once the blocks speed up, as a hurried player is.
- */
-const HORIZON_PLAY = 0.7;
-const HORIZON_END = 0.25;
-const SAMPLE = 1 / 30;
-const DIRECTIONS = [0, -1, 1];
-/** Extra room, each side, it keeps between the paddle and a block. */
-const MARGIN = 10;
+var Shots = {
+  setup: function (n) {
+    G.shotMode = n;
+    document.getElementById('startscreen').style.display = 'none';
+    document.getElementById('hud').style.display = 'block';
+    G.started = true;
 
-/** Seconds until moving in `direction` (-1, 0, 1) runs the paddle into a block; Infinity when it never does. */
-function timeToHit(state, direction, horizon) {
-  const player = state.player;
-  for (let t = SAMPLE; t <= horizon; t += SAMPLE) {
-    const x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * t));
-    for (let index = 0; index < state.items.length; index += 1) {
-      const item = state.items[index];
-      if (!item.active || item.kind !== KIND_BLOCK) continue;
-      const y = item.y + item.speed * t;
-      if (y + item.height > player.y && y < player.y + player.height && item.x < x + player.width + MARGIN && item.x + item.width > x - MARGIN) return t;
+    if (n === 1) {
+      // On foot in the city centre, first job on the board.
+      G.mode = 'foot';
+      G.player.group.position.set(3, 0, 2);
+      G.player.yaw = Math.PI / 2;
+      G.camYaw = Math.PI / 2; G.camPitch = 0.3;
+      G.missionIndex = 0;
+      Missions.pointAt(DEPOT.x, DEPOT.z);
+      HUD.setObjective('Go to the gold marker at the depot to take a job');
+      G.cash = 40;
     }
-  }
-  return Infinity;
-}
 
-/** Of the safe ways to move, the one toward the lowest coin (or the centre); else the one that is hit last. */
-function autopilot(state, horizon) {
-  const player = state.player;
-  let coin = null;
-  for (let index = 0; index < state.items.length; index += 1) {
-    const item = state.items[index];
-    if (item.active && item.kind !== KIND_BLOCK && (coin === null || item.y > coin.y)) coin = item;
-  }
-  const target = coin === null ? FIELD.width / 2 : coin.x + coin.width / 2;
-  const centre = player.x + player.width / 2;
-  const wanted = target > centre + 8 ? 1 : target < centre - 8 ? -1 : 0;
-  let best = wanted;
-  let bestTime = timeToHit(state, wanted, horizon);
-  for (let index = 0; index < DIRECTIONS.length && bestTime !== Infinity; index += 1) {
-    const time = timeToHit(state, DIRECTIONS[index], horizon);
-    if (time > bestTime) {
-      bestTime = time;
-      best = DIRECTIONS[index];
+    if (n === 2) {
+      // Mid-chase: Mara in a coral coupe, three stars, two units on her tail.
+      var car = Vehicles.makeCar('traffic', 0xc94f6d);
+      Vehicles.placeCar(car, 0, -96, 0);
+      car.speed = 17;
+      G.cars.push(car);
+      Player.enterCarSilent(car);
+      G.wantedHeat = 3; Wanted.syncStars();
+      G.unseenTime = 0;
+      for (var i = 0; i < 2; i++) {
+        var cop = Vehicles.makeCar('police', 0xf2f2f2);
+        Vehicles.placeCar(cop, -3.5 + i * 7.5, -110 - i * 9, 0.08 * (i ? -1 : 1));
+        cop.speed = 16;
+        G.cops.push({ car: cop, stuckT: 0, lastX: 0, lastZ: 0 });
+      }
+      G.camYaw = Math.PI; G.camPitch = 0.24;
+      G.cash = 590;
+      HUD.setObjective('Lose the police — break line of sight and let the heat die');
+      G.mission = { def: MISSIONS[3] };
+      Missions.stepIndex = 0;
+      Missions.hideMarker();
     }
-  }
-  return best;
-}
 
-/**
- * Set `world` to the named scene (start, play or end; any other name is start) and return the
- * screen to draw over it and the best score to show.
- */
-export function stageShot(name, world) {
-  world.reset();
-  if (name !== 'play' && name !== 'end') {
-    for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, true);
-    return { screen: SCREEN_TITLE, best: 0 };
-  }
-  const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
-  const horizon = name === 'end' ? HORIZON_END : HORIZON_PLAY;
-  for (let index = 0; index < limit / STEP; index += 1) {
-    if (world.step(STEP, autopilot(world.state, horizon), false) & EVENT_OVER) break;
-  }
-  const over = world.state.lives === 0;
-  return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
-}
+    if (n === 3) {
+      // A mission moment: Mara pulls up at the marina delivery marker while
+      // Felix talks her in.
+      var car3 = Vehicles.makeCar('traffic', 0x3f6fd8);
+      Vehicles.placeCar(car3, 228, 3.5, Math.PI / 2);
+      car3.speed = 0;
+      G.cars.push(car3);
+      Player.enterCarSilent(car3);
+      G.camYaw = Math.PI / 2 - 0.4; G.camPitch = 0.3;
+      G.missionIndex = 1;
+      G.mission = { def: MISSIONS[1] };
+      Missions.stepIndex = 1;
+      Missions.pointAt(236, 0);
+      Missions.stepTimer = 47; // mid-delivery countdown, shown by the HUD
+      HUD.setObjective('Get the package to the marina before the buyer leaves');
+      Missions.say([['Felix', 'Buyer is on the pier, Mara. Thirty seconds of patience left in him.']]);
+      G.cash = 450;
+    }
+
+    if (n === 4) {
+      // The wide one: sunset over the whole grid from the beach boulevard.
+      City.setSunset();
+      var car4 = Vehicles.makeCar('traffic', 0xf0a832);
+      Vehicles.placeCar(car4, 224, 30, -Math.PI / 2 - 0.35);
+      car4.speed = 0;
+      G.cars.push(car4);
+      Player.enterCarSilent(car4);
+      G.camYaw = -Math.PI / 2 + 0.3; G.camPitch = 0.6;
+      G.camDistOverride = 30; // pulled-back establishing shot of the whole grid
+      G.cash = 1340;
+      G.storyDone = true;
+      Missions.hideMarker();
+      HUD.setObjective('Story complete — Del Sol City is yours. Free roam!');
+    }
+
+    HUD.renderCash();
+    HUD.renderStars();
+  },
+};

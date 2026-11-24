@@ -1,21 +1,27 @@
-// A working gta6-01 entry (Node 22, standard library only): the game is this directory's
-// game/ folder, plain static files a desktop browser loads offline (game/index.html and its ES
-// modules, no library and no network request), and the program hands it in. It copies game/ and
-// screenshots/ from beside this file to /output and writes /output/dossier.json, the summary the
-// judge reads, with the vendored make.fun library. Only the plumbing, not an open world: Block
-// Dodger, a plain 2D canvas game where a paddle dodges falling blocks and catches coins, with a
-// title screen, score, lives and levels, game over and restart, flat colours and no sound. Build
-// your own open-world crime game in its place (three.js or any library you vendor under game/),
-// put your 3 or 4 PNG or JPEG screenshots in screenshots/ (the first by name is the cover) and run it.
+// Del Sol City — main.ts, the hand-in program for make.fun's gta6-01 bounty.
 //
-// Serve it locally with `node serve.ts`, then open http://localhost:8080.
-// Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
-//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+// The game itself is the static site in game/ beside this file: an original
+// open-world crime game (a procedural coastal city, traffic and pedestrians,
+// stealable cars, a wanted level with police chases, gunplay, a five-mission
+// story about driver-for-hire Mara Vale, a HUD with a live minimap, and a
+// localStorage save), written as plain classic scripts over a vendored
+// three.js build, loading nothing from the network.
+//
+// This program hands it in: it copies game/ and screenshots/ from beside this
+// file into the output directory (MAKEFUN_OUTPUT_DIR locally, /output in the
+// grader), writes a small build-info.json naming the game and version, and
+// writes dossier.json with buildDossier from the vendored make.fun library,
+// using this bounty's scorer caps so the program refuses exactly what the
+// scorer would refuse. Node 22, standard library only, deterministic: the
+// same repository produces the same bytes on every run.
 
 import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
+
+const GAME_TITLE = 'Del Sol City';
+const GAME_VERSION = '1.0.0';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
@@ -23,12 +29,28 @@ const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 mkdirSync(out, { recursive: true });
 cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
 mkdirSync(join(out, 'screenshots'), { recursive: true });
-if (existsSync(join(here, 'screenshots'))) cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
+if (existsSync(join(here, 'screenshots'))) {
+  cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
+}
 
-// The scorer's own caps (reference/gate.json): only text_max_bytes shapes the bytes; the others refuse an entry the
-// scorer would refuse (more than 4 screenshots or one over 256 KiB; more than 993 files in game/ or 48 MiB of game
-// files, in all, or a path under game/ over 1000 bytes: game/ counts beside /output's own 1000-entry cap, its
-// screenshots/ and dossier.json).
+// Build info for anyone unpacking the entry: what this is, in one glance.
+writeFileSync(
+  join(out, 'build-info.json'),
+  JSON.stringify(
+    {
+      title: GAME_TITLE,
+      version: GAME_VERSION,
+      competition: 'gta6-01',
+      engine: 'three.js (vendored, game/vendor/three.min.js)',
+      entrypoint: 'game/index.html',
+      screenshots: ['1-cover.jpg', '2-chase.jpg', '3-mission.jpg', '4-city.jpg'],
+    },
+    null,
+    2,
+  ) + '\n',
+);
+
+// The dossier the judge reads, byte for byte what the scorer recomputes.
 writeFileSync(
   join(out, 'dossier.json'),
   buildDossier(out, {

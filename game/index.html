@@ -1,19 +1,133 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Block Dodger</title>
+<title>Del Sol City — an open-world crime game</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #11141b; }
-  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  /* Read aloud, never shown: the status line screen readers announce. */
-  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0c0e12;
+    font-family: "Avenir Next", "Segoe UI", Verdana, sans-serif; color: #f2ede2; }
+  #game, #game canvas { width: 100%; height: 100%; display: block; }
+  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center; z-index: 30; }
+  #startscreen { background: linear-gradient(180deg, rgba(16,20,34,0.25), rgba(16,12,20,0.78) 75%); }
+  #startscreen h1 { font-size: 76px; letter-spacing: 3px; font-weight: 800; color: #ffd76a;
+    text-shadow: 0 4px 0 #c94f6d, 0 10px 34px rgba(0,0,0,0.65); }
+  #startscreen h2 { font-size: 19px; font-weight: 500; color: #ffe9bd; margin: 10px 0 4px; letter-spacing: 1px; }
+  #startscreen .story { max-width: 560px; font-size: 15px; line-height: 1.5; color: #e8e2d2; margin: 12px 20px; }
+  #startscreen .controls { font-size: 13px; line-height: 1.75; color: #cfd6de; background: rgba(10,12,18,0.55);
+    border: 1px solid rgba(255,215,106,0.35); border-radius: 10px; padding: 10px 22px; margin-bottom: 20px; }
+  .btn { display: inline-block; cursor: pointer; border: none; border-radius: 8px; padding: 13px 38px;
+    font-size: 18px; font-weight: 700; letter-spacing: 1px; margin: 4px;
+    background: #ffd76a; color: #221a08; box-shadow: 0 4px 18px rgba(0,0,0,0.45); }
+  .btn:hover { background: #ffe08a; }
+  .btn.ghost { background: rgba(20,24,34,0.8); color: #ffd76a; border: 1px solid #ffd76a; }
+  #pausescreen, #endscreen { background: rgba(8,10,16,0.72); display: none; }
+  #endscreen h1 { font-size: 84px; letter-spacing: 8px; font-weight: 800; }
+  #endscreen p, #pausescreen p { margin: 12px 0 22px; font-size: 16px; color: #e8e2d2; }
+  #pausescreen h1 { font-size: 46px; letter-spacing: 4px; color: #ffd76a; }
+  #hud { display: none; position: fixed; inset: 0; pointer-events: none; z-index: 20; }
+  #topleft { position: absolute; left: 16px; bottom: 16px; }
+  #minimap { width: 188px; height: 188px; border-radius: 12px; border: 2px solid rgba(255,255,255,0.35);
+    background: #2e3138; box-shadow: 0 4px 18px rgba(0,0,0,0.5); }
+  #healthWrap { width: 188px; height: 13px; background: rgba(0,0,0,0.55); border-radius: 7px; margin-top: 8px; overflow: hidden; }
+  #healthFill { height: 100%; width: 100%; background: #53d769; transition: width 0.15s; }
+  #topright { position: absolute; right: 18px; top: 14px; text-align: right; }
+  #cash { font-size: 30px; font-weight: 800; color: #8fe388; text-shadow: 0 2px 6px rgba(0,0,0,0.7); }
+  #stars { font-size: 27px; color: #ffd76a; text-shadow: 0 2px 6px rgba(0,0,0,0.8); letter-spacing: 3px; }
+  #objective { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); max-width: 620px;
+    background: rgba(10,12,18,0.62); border-left: 4px solid #ffc93c; border-radius: 6px;
+    padding: 9px 16px; font-size: 15.5px; text-align: center; }
+  #timer { position: absolute; top: 74px; left: 50%; transform: translateX(-50%); display: none;
+    font-size: 30px; font-weight: 800; color: #ffd76a; text-shadow: 0 2px 8px rgba(0,0,0,0.8); }
+  #note { position: absolute; top: 118px; left: 50%; transform: translateX(-50%); font-size: 15px;
+    color: #ffe9bd; opacity: 0; transition: opacity 0.4s; text-shadow: 0 2px 6px rgba(0,0,0,0.9); }
+  #dialogue { position: absolute; bottom: 118px; left: 50%; transform: translateX(-50%); width: 640px; max-width: 88vw;
+    background: rgba(8,10,16,0.78); border-radius: 10px; padding: 12px 18px; display: none; }
+  #dialogueWho { color: #ffc93c; font-weight: 700; font-size: 14px; letter-spacing: 1px; text-transform: uppercase; }
+  #dialogueText { font-size: 17px; line-height: 1.45; margin-top: 3px; }
+  #banner { position: absolute; top: 24%; left: 50%; transform: translateX(-50%); text-align: center;
+    display: none; opacity: 0; transition: opacity 0.5s; }
+  #bannerTitle { font-size: 40px; font-weight: 800; letter-spacing: 2px; color: #ffd76a; text-shadow: 0 3px 14px rgba(0,0,0,0.8); }
+  #bannerSub { font-size: 19px; color: #fff; text-shadow: 0 2px 8px rgba(0,0,0,0.8); }
+  #prompt { position: absolute; bottom: 210px; left: 50%; transform: translateX(-50%); display: none;
+    background: rgba(10,12,18,0.7); padding: 7px 16px; border-radius: 16px; font-size: 14.5px; }
+  #bustedWrap { position: absolute; bottom: 250px; left: 50%; transform: translateX(-50%); width: 240px; display: none; text-align: center; }
+  #bustedWrap .label { color: #6db3ff; font-weight: 800; letter-spacing: 3px; font-size: 15px; text-shadow: 0 2px 6px #000; }
+  #bustedBar { height: 9px; background: rgba(0,0,0,0.6); border-radius: 5px; overflow: hidden; margin-top: 4px; }
+  #bustedFill { height: 100%; width: 0%; background: #6db3ff; }
+  #damage { position: fixed; inset: 0; pointer-events: none; z-index: 25; opacity: 0; transition: opacity 0.3s;
+    background: radial-gradient(ellipse at center, transparent 55%, rgba(200,20,20,0.55) 100%); }
+  #crosshair { position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
+    border-radius: 50%; background: rgba(255,255,255,0.85); box-shadow: 0 0 5px rgba(0,0,0,0.9); }
+  .hint { position: absolute; bottom: 14px; right: 18px; font-size: 12px; color: rgba(255,255,255,0.55); text-align: right; }
 </style>
 </head>
 <body>
-<canvas id="game" aria-label="Block Dodger: move the paddle left and right to dodge falling blocks and catch coins"></canvas>
-<p id="status" role="status" aria-live="polite"></p>
-<script type="module" src="./src/main.js"></script>
+<div id="game"></div>
+<div id="damage"></div>
+
+<div id="hud">
+  <div id="objective"></div>
+  <div id="timer"></div>
+  <div id="note"></div>
+  <div id="banner"><div id="bannerTitle"></div><div id="bannerSub"></div></div>
+  <div id="topleft">
+    <canvas id="minimap" width="188" height="188"></canvas>
+    <div id="healthWrap"><div id="healthFill"></div></div>
+  </div>
+  <div id="topright"><div id="cash">$0</div><div id="stars">☆☆☆☆☆</div></div>
+  <div id="crosshair"></div>
+  <div id="dialogue"><div id="dialogueWho"></div><div id="dialogueText"></div></div>
+  <div id="prompt"></div>
+  <div id="bustedWrap"><div class="label">BUSTED</div><div id="bustedBar"><div id="bustedFill"></div></div></div>
+  <div class="hint">WASD move · mouse look · E enter/exit car · hold click to aim &amp; shoot<br>Shift sprint · Space handbrake · Esc pause · M mute</div>
+</div>
+
+<div id="startscreen" class="overlay">
+  <h1>DEL SOL CITY</h1>
+  <h2>An open-world crime game</h2>
+  <p class="story">Mara Vale drives other people's problems for a living in Del Sol City — a sun-soaked
+  coastal grid of palms, boulevards and bad decisions. Take Felix's jobs, run the packages, shake the
+  Del Sol PD, and earn the boat money waiting at the marina. Five jobs. One city. Zero questions asked.</p>
+  <div class="controls">
+    WASD — walk / drive &nbsp;·&nbsp; Mouse — camera (click the game to capture it)<br>
+    E — steal / enter / exit a car &nbsp;·&nbsp; Hold left mouse — aim, click — shoot<br>
+    Shift — sprint &nbsp;·&nbsp; Space — handbrake &nbsp;·&nbsp; Esc — pause &nbsp;·&nbsp; M — mute
+  </div>
+  <div>
+    <button class="btn" id="startBtn">START NEW GAME</button>
+    <button class="btn ghost" id="continueBtn" style="display:none">CONTINUE</button>
+  </div>
+</div>
+
+<div id="pausescreen" class="overlay">
+  <h1>PAUSED</h1>
+  <p>Your progress is saved on this machine.</p>
+  <button class="btn" id="resumeBtn">RESUME</button>
+</div>
+
+<div id="endscreen" class="overlay">
+  <h1 id="endTitle">WASTED</h1>
+  <p id="endSub"></p>
+  <button class="btn" id="respawnBtn">RESPAWN</button>
+</div>
+
+<script src="vendor/three.min.js"></script>
+<script src="src/config.js"></script>
+<script src="src/random.js"></script>
+<script src="src/audio.js"></script>
+<script src="src/city.js"></script>
+<script src="src/vehicles.js"></script>
+<script src="src/pedestrians.js"></script>
+<script src="src/player.js"></script>
+<script src="src/police.js"></script>
+<script src="src/combat.js"></script>
+<script src="src/missions.js"></script>
+<script src="src/hud.js"></script>
+<script src="src/save.js"></script>
+<script src="src/shots.js"></script>
+<script src="src/main.js"></script>
 </body>
 </html>

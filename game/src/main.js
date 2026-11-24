@@ -1,134 +1,162 @@
-// Boot and the one loop: input is read every frame, the world advances in fixed 1/60 s steps
-// (several in a slow frame, none in a fast one), and the renderer paints what is there. The game
-// moves between four screens: title, play, paused and game over.
-//
-// ?seed=N fixes the falling pattern. ?shot=start|play|end (with &seed=N) stages that scene
-// instead of running the loop, paints it twice and sets window.__shotReady for a screenshot.
-import { BEST_KEY, LIVES, STEP } from './config.js';
-import { createRandom } from './random.js';
-import { createWorld, EVENT_HIT, EVENT_OVER } from './world.js';
-import { ACTION_CONFIRM, ACTION_PAUSE, createInput } from './input.js';
-import { createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
-import { stageShot } from './shots.js';
+// Del Sol City — main.js
+// Boot and the main loop. Builds the renderer and the world in a fixed order
+// (seeded, so every load makes the same city), wires keyboard/mouse input and
+// the start/pause/end screens, then ticks every system once per frame:
+// traffic, pedestrians, the player, police, combat, missions, HUD, water.
 
-/** The longest frame the loop catches up on; a longer stall (a hidden tab) is dropped, not replayed. */
-const MAX_FRAME = 0.25;
+(function () {
+  var params = new URLSearchParams(location.search);
+  var shot = parseInt(params.get('shot') || '0', 10) || 0;
 
-const params = new URLSearchParams(window.location.search);
-const shot = params.get('shot');
-const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
-const seed = Number.isInteger(seedParam) ? seedParam : Math.floor(Math.random() * 4294967296);
+  function boot() {
+    seedRandom(20261117); // the city is the same on every visit
+    G.scene = new THREE.Scene();
+    G.camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 1500);
+    G.renderer = new THREE.WebGLRenderer({ antialias: true });
+    G.renderer.setSize(innerWidth, innerHeight);
+    G.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    document.getElementById('game').appendChild(G.renderer.domElement);
+    G.clock = new THREE.Clock();
 
-const canvas = document.getElementById('game');
-const status = document.getElementById('status');
-const world = createWorld(createRandom(seed));
-const renderer = createRenderer(canvas);
+    City.build(G.scene);
+    Player.build();
+    Vehicles.spawnTraffic(15);
+    Vehicles.spawnParked(13);
+    Pedestrians.spawn(30);
+    Combat.init();
+    HUD.init();
+    Missions.init();
 
-function readBest() {
-  try {
-    return Number.parseInt(window.localStorage.getItem(BEST_KEY) ?? '0', 10) || 0;
-  } catch {
-    return 0;
-  }
-}
+    wireInput();
+    wireScreens();
 
-function saveBest(value) {
-  try {
-    window.localStorage.setItem(BEST_KEY, String(value));
-  } catch {
-    // Storage can be off (private windows): the best score then lasts this visit only.
-  }
-}
+    if (shot >= 1 && shot <= 4) Shots.setup(shot);
+    else if (SaveGame.exists()) document.getElementById('continueBtn').style.display = 'inline-block';
 
-function runShot(name) {
-  const scene = stageShot(name, world);
-  let painted = 0;
-  function paint() {
-    renderer.draw(world.state, scene.screen, scene.best);
-    painted += 1;
-    if (painted < 2) requestAnimationFrame(paint);
-    else window.__shotReady = true;
-  }
-  requestAnimationFrame(paint);
-}
-
-function runGame() {
-  const input = createInput(canvas);
-  let screen = SCREEN_TITLE;
-  let best = readBest();
-  let accumulator = 0;
-  let last = performance.now();
-
-  // Screen readers (and anyone watching the page's text) hear the screen changes and each hit.
-  function announce(message) {
-    status.textContent = message;
+    G.renderer.setAnimationLoop(tick);
   }
 
-  function startGame() {
-    world.reset();
-    accumulator = 0;
-    screen = SCREEN_PLAY;
-    announce(`Playing. ${LIVES} lives.`);
+  function wireInput() {
+    addEventListener('keydown', function (e) {
+      G.keys[e.code] = true;
+      if (e.code === 'KeyM') { G.muted = !G.muted; AudioSys.setMuted(G.muted); }
+      if (e.code === 'Escape' && (G.mode === 'foot' || G.mode === 'car')) pauseGame();
+      else if (e.code === 'Escape' && G.mode === 'paused') resumeGame();
+      if (['ArrowUp', 'ArrowDown', 'Space'].indexOf(e.code) >= 0) e.preventDefault();
+    });
+    addEventListener('keyup', function (e) { G.keys[e.code] = false; });
+    addEventListener('mousemove', function (e) {
+      if (G.pointerLocked) { G.mouseDX += e.movementX || 0; G.mouseDY += e.movementY || 0; }
+    });
+    addEventListener('mousedown', function (e) { if (e.button === 0) G.mouseDown = true; });
+    addEventListener('mouseup', function (e) { if (e.button === 0) G.mouseDown = false; });
+    document.addEventListener('pointerlockchange', function () {
+      G.pointerLocked = document.pointerLockElement === G.renderer.domElement;
+    });
+    G.renderer.domElement.addEventListener('click', function () {
+      AudioSys.init(); AudioSys.resume();
+      if (G.started && (G.mode === 'foot' || G.mode === 'car') && !G.pointerLocked && !G.shotMode) {
+        G.renderer.domElement.requestPointerLock();
+      }
+    });
+    addEventListener('resize', function () {
+      G.camera.aspect = innerWidth / innerHeight;
+      G.camera.updateProjectionMatrix();
+      G.renderer.setSize(innerWidth, innerHeight);
+    });
+    addEventListener('beforeunload', function () { if (G.started) SaveGame.write(); });
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden && G.started) SaveGame.write();
+    });
   }
 
-  function endGame() {
-    screen = SCREEN_OVER;
-    if (world.state.score > best) {
-      best = world.state.score;
-      saveBest(best);
+  function wireScreens() {
+    document.getElementById('startBtn').addEventListener('click', function () {
+      AudioSys.init(); AudioSys.resume();
+      SaveGame.clear();
+      startGame(false);
+    });
+    document.getElementById('continueBtn').addEventListener('click', function () {
+      AudioSys.init(); AudioSys.resume();
+      startGame(true);
+    });
+    document.getElementById('resumeBtn').addEventListener('click', resumeGame);
+    document.getElementById('respawnBtn').addEventListener('click', function () {
+      Player.respawn();
+    });
+  }
+
+  function startGame(fromSave) {
+    document.getElementById('startscreen').style.display = 'none';
+    document.getElementById('hud').style.display = 'block';
+    G.started = true;
+    G.mode = 'foot';
+    if (fromSave) SaveGame.apply(SaveGame.read());
+    else {
+      HUD.setObjective('Go to the gold marker at the depot to take a job');
+      Missions.say([
+        ['Mara', 'Del Sol City. Six years driving other people\'s problems around it.'],
+        ['Mara', 'Rent is due, the tank is empty, and Felix always calls when both are true.'],
+      ]);
     }
-    announce(`Game over. Score ${world.state.score}. Best ${best}.`);
+    if (!G.shotMode) G.renderer.domElement.requestPointerLock();
   }
 
-  function handleActions() {
-    const actions = input.takeActions();
-    if (actions & ACTION_CONFIRM && (screen === SCREEN_TITLE || screen === SCREEN_OVER)) startGame();
-    else if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
-    } else if (actions & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_PAUSED) {
-      screen = SCREEN_PLAY;
-      announce('Playing.');
-    }
+  function pauseGame() {
+    G.prevMode = G.mode;
+    G.mode = 'paused';
+    document.getElementById('pausescreen').style.display = 'flex';
+    if (document.exitPointerLock) document.exitPointerLock();
+    SaveGame.write();
   }
 
-  function step() {
-    if (screen === SCREEN_TITLE) {
-      world.step(STEP, 0, true);
+  function resumeGame() {
+    document.getElementById('pausescreen').style.display = 'none';
+    G.mode = G.prevMode === 'car' ? 'car' : 'foot';
+    if (!G.shotMode) G.renderer.domElement.requestPointerLock();
+  }
+
+  var saveT = 0;
+  var shotFrames = 0;
+  function tick() {
+    // Screenshot scenes render a fixed run of frames then hold the last one,
+    // so a headless capture finishes quickly instead of simulating forever.
+    if (G.shotMode && ++shotFrames > 150) { G.renderer.setAnimationLoop(null); return; }
+    var dt = Math.min(G.clock.getDelta(), 0.05);
+    if (G.mode === 'paused' || G.mode === 'menu') {
+      // The menu idles over a slow pan of the city so the title sits on life.
+      if (G.mode === 'menu') {
+        var t = performance.now() * 0.00004;
+        G.camera.position.set(Math.sin(t) * 150, 42, Math.cos(t) * 150);
+        G.camera.lookAt(0, 6, 0);
+      }
+      G.renderer.render(G.scene, G.camera);
       return;
     }
-    const events = world.step(STEP, input.direction(), false);
-    if (events & EVENT_OVER) endGame();
-    else if (events & EVENT_HIT) announce(world.state.lives === 1 ? 'Hit. 1 life left.' : `Hit. ${world.state.lives} lives left.`);
-  }
-
-  function frame(now) {
-    requestAnimationFrame(frame);
-    accumulator += Math.min((now - last) / 1000, MAX_FRAME);
-    last = now;
-    handleActions();
-    if (screen === SCREEN_TITLE || screen === SCREEN_PLAY) {
-      while (accumulator >= STEP && (screen === SCREEN_TITLE || screen === SCREEN_PLAY)) {
-        step();
-        accumulator -= STEP;
-      }
+    G.elapsed += dt;
+    if (G.mode === 'foot') Player.updateFoot(dt);
+    else if (G.mode === 'car') Player.updateCar(dt);
+    if (G.mode === 'foot' || G.mode === 'car') {
+      Vehicles.updateTraffic(dt);
+      Pedestrians.update(dt);
+      Police.update(dt);
+      Wanted.update(dt);
+      Combat.tryShoot(dt);
+      Combat.updateCollisions(dt);
+      Missions.update(dt);
+      City.update(G.elapsed);
+      HUD.update(dt);
+      saveT += dt;
+      if (saveT > 6) { saveT = 0; SaveGame.write(); }
     } else {
-      accumulator = 0;
+      // Busted/wasted: let the world drift on behind the end screen.
+      Vehicles.updateTraffic(dt);
+      Pedestrians.update(dt);
+      City.update(G.elapsed);
     }
-    renderer.draw(world.state, screen, best);
+    G.renderer.render(G.scene, G.camera);
   }
 
-  // Leaving the tab pauses a running game rather than letting blocks fall unseen.
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
-    }
-  });
-
-  announce('Block Dodger. Press Space or click to start.');
-  requestAnimationFrame(frame);
-}
-
-if (shot) runShot(shot);
-else runGame();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();
